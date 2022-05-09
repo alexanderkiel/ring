@@ -3,21 +3,21 @@
 
   Adapters are used to convert Ring handlers into running web servers."
   (:require [ring.util.servlet :as servlet])
-  (:import [org.eclipse.jetty.server
-            Request
-            Server
-            ServerConnector
+  (:import [javax.servlet AsyncContext AsyncEvent AsyncListener DispatcherType]
+           [javax.servlet.http HttpServletRequest HttpServletResponse]
+           [org.eclipse.jetty.server
             ConnectionFactory
             HttpConfiguration
             HttpConnectionFactory
-            SslConnectionFactory
-            SecureRequestCustomizer]
+            Request
+            SecureRequestCustomizer
+            Server
+            ServerConnector
+            SslConnectionFactory]
            [org.eclipse.jetty.server.handler AbstractHandler]
            [org.eclipse.jetty.util BlockingArrayQueue]
-           [org.eclipse.jetty.util.thread ThreadPool QueuedThreadPool]
-           [org.eclipse.jetty.util.ssl SslContextFactory$Server KeyStoreScanner]
-           [javax.servlet AsyncContext DispatcherType AsyncEvent AsyncListener]
-           [javax.servlet.http HttpServletRequest HttpServletResponse]))
+           [org.eclipse.jetty.util.ssl KeyStoreScanner SslContextFactory$Server]
+           [org.eclipse.jetty.util.thread QueuedThreadPool ThreadPool]))
 
 (defn- ^AbstractHandler proxy-handler [handler]
   (proxy [AbstractHandler] []
@@ -33,15 +33,15 @@
     (.sendError response 500 (.getMessage exception))
     (.complete context)))
 
-(defn- async-jetty-respond [context response]
+(defn- async-jetty-respond [context response non-blocking?]
   (fn [response-map]
-    (servlet/update-servlet-response response context response-map)))
+    (servlet/update-servlet-response response context response-map non-blocking?)))
 
 (defn- async-timeout-listener [request context response handler]
   (proxy [AsyncListener] []
     (onTimeout [^AsyncEvent _]
       (handler (servlet/build-request-map request)
-               (async-jetty-respond context response)
+               (async-jetty-respond context response false)
                (async-jetty-raise context response)))
     (onComplete [^AsyncEvent _])
     (onError [^AsyncEvent _])
@@ -58,7 +58,7 @@
            (async-timeout-listener request context response timeout-handler)))
         (handler
          (servlet/build-request-map request)
-         (async-jetty-respond context response)
+         (async-jetty-respond context response true)
          (async-jetty-raise context response))
         (.setHandled base-request true)))))
 

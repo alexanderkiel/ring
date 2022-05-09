@@ -1,11 +1,11 @@
 (ns ring.util.servlet
   "Compatibility functions for turning a ring handler into a Java servlet."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as string]
+  (:require [clojure.string :as string]
             [ring.core.protocols :as protocols])
-  (:import [java.io File InputStream FileInputStream]
-           [java.util Locale]
-           [javax.servlet AsyncContext]
+  (:import [java.io OutputStream FilterOutputStream]
+           [java.util Arrays Locale Queue]
+           [java.util.concurrent BlockingQueue LinkedBlockingQueue]
+           [javax.servlet AsyncContext ServletOutputStream WriteListener]
            [javax.servlet.http HttpServlet
                                HttpServletRequest
                                HttpServletResponse]))
@@ -78,25 +78,45 @@
   (when-let [content-type (get headers "Content-Type")]
     (.setContentType response content-type)))
 
-(defn- make-output-stream
-  [^HttpServletResponse response ^AsyncContext context]
-  (let [os (.getOutputStream response)]
-    (if (nil? context)
-      os
-      (proxy [java.io.FilterOutputStream] [os]
-        (write
-          ([b]         (.write os b))
-          ([b off len] (.write os b off len)))
-        (close []
-          (.close os)
-          (.complete context))))))
+(defn- async-write-listener
+  [^AsyncContext context ^ServletOutputStream output-stream ^BlockingQueue queue]
+  (reify WriteListener
+    (onWritePossible [_]
+      (loop []
+        (when (.isReady output-stream)
+          (let [token (.take queue)]
+            (if (identical? ::end token)
+              (do (.close output-stream)
+                  (.complete context))
+              (do (.write output-stream ^bytes token)
+                  (recur)))))))))
+
+(defn- completing-output-stream [output-stream ^AsyncContext context]
+  (proxy [FilterOutputStream] [output-stream]
+    (close []
+      (.close output-stream)
+      (.complete context))))
+
+(defn- queued-output-stream [^Queue queue]
+  (proxy [OutputStream] []
+    (write
+      ([int]
+       (.add queue (byte-array [int])))
+      ([bytes off len]
+       (.add queue (Arrays/copyOfRange ^bytes bytes (int off) (int len)))))
+    (close []
+      (.add queue ::end))))
+
+(defn- write-body-to-queue [queue body response]
+  (let [output-stream (queued-output-stream queue)]
+    (protocols/write-body-to-stream body response output-stream)))
 
 (defn update-servlet-response
   "Update the HttpServletResponse using a response map. Takes an optional
-  AsyncContext."
+  AsyncContext and non-blocking? flag."
   ([response response-map]
-   (update-servlet-response response nil response-map))
-  ([^HttpServletResponse response context response-map]
+   (update-servlet-response response nil response-map false))
+  ([^HttpServletResponse response context response-map non-blocking?]
    (let [{:keys [status headers body]} response-map]
      (when (nil? response)
        (throw (NullPointerException. "HttpServletResponse is nil")))
@@ -105,8 +125,18 @@
      (when status
        (.setStatus response status))
      (set-headers response headers)
-     (let [output-stream (make-output-stream response context)]
-       (protocols/write-body-to-stream body response-map output-stream)))))
+     (let [output-stream (.getOutputStream response)]
+       (cond
+         (and non-blocking? context)
+         (let [queue (LinkedBlockingQueue.)]
+           (.setWriteListener output-stream (async-write-listener context output-stream queue))
+           (write-body-to-queue queue body response-map))
+
+         context
+         (protocols/write-body-to-stream body response-map (completing-output-stream output-stream context))
+
+         :else
+         (protocols/write-body-to-stream body response-map output-stream))))))
 
 (defn- make-blocking-service-method [handler]
   (fn [servlet request response]
@@ -124,7 +154,7 @@
            (build-request-map)
            (merge-servlet-keys servlet request response))
        (fn [response-map]
-         (update-servlet-response response context response-map))
+         (update-servlet-response response context response-map true))
        (fn [^Throwable exception]
          (.sendError response 500 (.getMessage exception))
          (.complete context))))))

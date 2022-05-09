@@ -50,7 +50,11 @@
         (proxy [javax.servlet.ServletOutputStream] []
           (write
             ([b] (.write output-stream b))
-            ([b off len] (.write output-stream b off len)))))
+            ([b off len] (.write output-stream b off len)))
+          (isReady []
+            true)
+          (setWriteListener [^javax.servlet.WriteListener write-listener]
+            (future (Thread/sleep 100) (.onWritePossible write-listener)))))
       (setStatus [status]
         (swap! response assoc :status status))
       (setHeader [name value]
@@ -165,6 +169,7 @@
                   :body           nil}
         response (atom {})]
     (run-servlet handler request response {:async? true})
+    (Thread/sleep 200)
     (is (= @(:completed request) true))
     (is (= (@response :status) 200))
     (is (= (@response :content-type) "text/plain"))
@@ -216,5 +221,6 @@
       :body    (reify proto/StreamableResponseBody
                  (write-body-to-stream [_ _ os]
                    (.write os (int \h))
-                   (.write os (.getBytes "ello"))))})
+                   (.write os (.getBytes "ello"))))}
+     false)
     (is (= "hello" (.toString (:body @response))))))

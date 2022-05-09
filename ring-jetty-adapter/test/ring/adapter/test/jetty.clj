@@ -436,14 +436,6 @@
 
   (testing "chunked sequence without sending termination chunk on error"
     (with-server chunked-lazy-seq-with-error {:port test-port}
-      (is (thrown? MalformedChunkCodingException (http/get test-url)))))
-
-  (testing "async chunked stream without sending termination chunk on error"
-    (with-server chunked-stream-with-error {:port test-port :async? true}
-      (is (thrown? MalformedChunkCodingException (http/get test-url)))))
-
-  (testing "async chunked sequence without sending termination chunk on error"
-    (with-server chunked-lazy-seq-with-error {:port test-port :async? true}
       (is (thrown? MalformedChunkCodingException (http/get test-url))))))
 
 (def thread-exceptions (atom []))
@@ -565,6 +557,7 @@
                  500)))))
 
     (testing "with timeout handlers, ring-style responses are generated"
+      (println "with timeout handlers, ring-style responses are generated")
       (with-server hello-world-slow-cps
         {:port test-port
          :async? true
