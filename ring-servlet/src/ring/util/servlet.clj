@@ -1,14 +1,15 @@
 (ns ring.util.servlet
   "Compatibility functions for turning a ring handler into a Java servlet."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as string]
+  (:require [clojure.string :as string]
             [ring.core.protocols :as protocols])
-  (:import [java.io File InputStream FileInputStream]
+  (:import [java.io OutputStream]
            [java.util Locale]
            [javax.servlet AsyncContext]
            [javax.servlet.http HttpServlet
                                HttpServletRequest
                                HttpServletResponse]))
+
+(set! *warn-on-reflection* true)
 
 (defn- get-headers
   "Creates a name/value map of all the request headers."
@@ -83,10 +84,14 @@
   (let [os (.getOutputStream response)]
     (if (nil? context)
       os
-      (proxy [java.io.FilterOutputStream] [os]
+      (proxy [OutputStream] []
         (write
-          ([b]         (.write os b))
-          ([b off len] (.write os b off len)))
+          ([b]
+           (if (instance? Integer b)
+             (.write os ^int b)
+             (.write os ^bytes b)))
+          ([b off len]
+           (.write os b off len)))
         (close []
           (.close os)
           (.complete context))))))
